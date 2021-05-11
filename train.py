@@ -13,8 +13,10 @@ from utils import weights_init_normal
 from model import Generator_S2F,Generator_F2S,Discriminator
 from datasets import ImageDataset
 
-os.environ["CUDA_VISIBLE_DEVICES"]="7,3,1,2,0,5,6,4"
+os.environ["CUDA_VISIBLE_DEVICES"]="0"
 torch.manual_seed(628)
+# print(torch.cuda.device_count())
+# print(torch.cuda.is_available())
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--epoch', type=int, default=0, help='starting epoch')
@@ -30,9 +32,8 @@ parser.add_argument('--snapshot_epochs', type=int, default=5, help='number of ep
 parser.add_argument('--iter_loss', type=int, default=100, help='average loss for n iterations')
 opt = parser.parse_args()
 
-
 # ISTD
-opt.dataroot = '/home/liuzhihao/dataset/PAISTD8'
+opt.dataroot = '/home/balin/exper/shadow_removal/Dataset/ISTD_Dataset/G2R'
 
 if not os.path.exists('ckpt'):
     os.mkdir('ckpt')
@@ -107,38 +108,62 @@ open(opt.log_path, 'w').write(str(opt) + '\n\n')
 for epoch in range(opt.epoch, opt.n_epochs):
     for i, batch in enumerate(dataloader):
         # Set model input
-        real_nsr = Variable(input_A.copy_(batch['A']))#non shadow region:input;step1-gt
-        random_sr = Variable(input_B.copy_(batch['B']))#random real shadow region:gan training
-        mask = Variable(input_C.copy_(batch['C']))#nonshadow region mask:step2-input
-        real_ns = Variable(input_D.copy_(batch['D']))#without real shadow region:step2-gt
-        real_nsrs = Variable(input_E.copy_(batch['E']))#without nonshadow region and real shadow region-step2-input
-        mask_dil = Variable(input_F.copy_(batch['F']))#without nonshadow region and real shadow region-step2-input
+        real_nsr = Variable(input_A.copy_(batch['A']))#non shadow region:input;step1-gt channel = 3 (Rn)
+        random_sr = Variable(input_B.copy_(batch['B']))#random real shadow region:gan training channel = 3 (Rs)
+        mask = Variable(input_C.copy_(batch['C']))#nonshadow region mask:step2-input channel = 1 (M)
+        real_ns = Variable(input_D.copy_(batch['D']))#without real shadow region:step2-gt channel = 3 (S)
+        real_nsrs = Variable(input_E.copy_(batch['E']))#without nonshadow region and real shadow region-step2-input channel = 3 (S - Rn)
+        mask_dil = Variable(input_F.copy_(batch['F']))#without nonshadow region and real shadow region-step2-input channel = 1 ψ(M)
         
         ###### Generators A2B and B2A ######
+        # netG_A2B = Shadow Generation Network
+        # netG_1 = Shadow Removal Network
+        # netG_2 = Refinement Network
+        # netD_B = Discriminator Network
         optimizer_G.zero_grad()
 
-        # Identity loss
+        ###### Identity loss
         # G_A2B(B) should equal B if real B is fed
+        # Rs = netG_A2B(Rs), random shadow image should be the same with itself after "netG_A2B"
+        # random_sr = Rs
+        # same_B = netG_A2B(Rs)
         same_B = netG_A2B(random_sr)
         loss_identity_B = criterion_identity(same_B, random_sr) * 5.0  # ||Gb(b)-b||1
 
-        # GAN loss
+        ###### GAN loss
+        # Lg = [netD_B(netG_A2B(Rn)) - 1] ** 2
+        # real_nsr = Rn
+        # fake_B = Rps
+        # pred_fake = netD_B(Rps) >> 1
         fake_B = netG_A2B(real_nsr)
         pred_fake = netD_B(fake_B)
         loss_GAN_A2B = criterion_GAN(pred_fake, target_real)  # log(Db(Gb(a)))
 
-
+        ###### Cycle loss
+        # Rn = Rf
+        # fake_B = Rps
+        # fake_nsr = Rf
+        # real_nsr = Rn
         fake_nsr=netG_1(fake_B)
         loss_cycle=criterion_cycle(fake_nsr,real_nsr)
         
+        ###### Full loss
+        # fake_nsr = Rf
+        # real_nsrs = (S - Rn)
+        # fake_nsr + real_nsrs = Re
+        # mask = M
+        # real_ns = S
         output=netG_2(fake_nsr+real_nsrs,mask*2.0-1.0)
         loss_sr=criterion_identity(output,real_ns)
         
-        loss_shadow=criterion_cycle(torch.cat(((output[:,0]+1.0)*mask_dil-1.0,output[:,1:]*mask_dil),1),torch.cat(((real_ns[:,0]+1.0)*mask_dil-1.0,real_ns[:,1:]*mask_dil),1))
+        ###### Area loss
+        # torch.cat(((output[:,0]+1.0)*mask_dil-1.0,output[:,1:]*mask_dil),1) = ψ(M)|Re
+        # torch.cat(((real_ns[:,0]+1.0)*mask_dil-1.0,real_ns[:,1:]*mask_dil),1) = ψ(M)|S
+        loss_shadow=criterion_cycle(torch.cat(((output[:,0]+1.0)*mask_dil-1.0,output[:,1:]*mask_dil),1), torch.cat(((real_ns[:,0]+1.0)*mask_dil-1.0,real_ns[:,1:]*mask_dil),1))
         
 
-        # Total loss
-        loss_G = loss_identity_B + loss_GAN_A2B+loss_cycle+loss_sr+loss_shadow
+        ###### Total loss
+        loss_G = loss_GAN_A2B + loss_identity_B + loss_cycle + loss_sr + loss_shadow
         loss_G.backward()
 
         #G_losses.append(loss_G.item())
@@ -150,17 +175,22 @@ for epoch in range(opt.epoch, opt.n_epochs):
         ###### Discriminator B ######
         optimizer_D_B.zero_grad()
 
-        # Real loss
+        ###### Real loss
+        # Ld = [netD_B(Rs) - 1] ** 2
+        # pred_real = netD_B(Rs) >> 1
         pred_real = netD_B(random_sr)
         loss_D_real = criterion_GAN(pred_real, target_real)  # log(Db(b))
 
-        # Fake loss
+        ###### Fake loss
+        # Ld = [netD_B(netG_A2B(Rn))] ** 2
+        # fake_B = Rps
+        # pred_fake = netD_B(Rps) >> 0
         fake_B = fake_B_buffer.push_and_pop(fake_B)
         pred_fake = netD_B(fake_B.detach())
         loss_D_fake = criterion_GAN(pred_fake, target_fake)  # log(1-Db(G(a)))
 
 
-        # Total loss
+        ###### Total loss
         loss_D_B = (loss_D_real + loss_D_fake) * 0.5
         loss_D_B.backward()
 
