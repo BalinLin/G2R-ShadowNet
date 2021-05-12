@@ -12,18 +12,20 @@ import warnings
 warnings.filterwarnings("ignore")
 os.environ["CUDA_VISIBLE_DEVICES"]="0,6,5,1,7,4,2,3"
 
+ckpPath = '/home/balin/exper/shadow_removal/G2R-ShadowNet/ckpt/ckpts/ckpt_fs'
+ckpPath = '/home/balin/exper/shadow_removal/G2R-ShadowNet/ckpt'
 parser = argparse.ArgumentParser()
 parser.add_argument('--cuda', action='store_true', help='use GPU computation')
 parser.add_argument('--n_cpu', type=int, default=8, help='number of cpu threads to use during batch generation')
-parser.add_argument('--generator_1', type=str, default='ckpt/netG_1.pth', help='A2B generator checkpoint file')
-parser.add_argument('--generator_2', type=str, default='ckpt/netG_2.pth', help='A2B generator checkpoint file')
+parser.add_argument('--generator_1', type=str, default= ckpPath + '/netG_1.pth', help='A2B generator checkpoint file')
+parser.add_argument('--generator_2', type=str, default= ckpPath + '/netG_2.pth', help='A2B generator checkpoint file')
 opt = parser.parse_args()
 
 ## ISTD
-opt.dataroot_A = '/home/liuzhihao/dataset/ISTD/test/test_A'
+opt.dataroot_A = '/home/balin/exper/shadow_removal/Dataset/ISTD_Dataset/test/test_A'
 opt.im_suf_A = '.png'
-# opt.dataroot_B = '/home/liuzhihao/dataset/ISTD/test/test_B'
-opt.dataroot_B = '/home/liuzhihao/BDRAR/test_A_mask_istd_6/'
+# opt.dataroot_B = '/home/balin/exper/shadow_removal/Dataset/ISTD_Dataset/test/test_B'
+opt.dataroot_B = '/home/balin/exper/shadow_removal/Dataset/ISTD_Dataset/test/test_mask_bdrar/test_mask'
 opt.im_suf_B = '.png'
 if torch.cuda.is_available():
     opt.cuda = True
@@ -45,10 +47,10 @@ if opt.cuda:
 gt_list = [os.path.splitext(f)[0] for f in os.listdir(opt.dataroot_A) if f.endswith(opt.im_suf_A)]
 
 for ee in range(100,90,-1):
-    g1ckpt='ckpt/netG_1.pth'
-    g2ckpt='ckpt/netG_2.pth'
-    # g1ckpt='ckpt/netG_1_%s.pth'%(ee)
-    # g2ckpt='ckpt/netG_2_%s.pth'%(ee)
+    g1ckpt= ckpPath + '/netG_1.pth'
+    g2ckpt= ckpPath + '/netG_2.pth'
+    g1ckpt='ckpt/netG_1_%s.pth'%(ee)
+    g2ckpt='ckpt/netG_2_%s.pth'%(ee)
 
     netG_1.load_state_dict(torch.load(g1ckpt))
     netG_1.eval()
@@ -161,8 +163,8 @@ for ee in range(100,90,-1):
                 labimage480=labimage480.view(480,640,3)
                 labimage480=labimage480.transpose(0, 1).transpose(0, 2).contiguous()
                 labimage480=labimage480.unsqueeze(0).to(device)
-                
-                
+
+
                 mask=io.imread(os.path.join(opt.dataroot_B, img_name + opt.im_suf_B))
                 
                 mask480=resize(mask,(480,640))
@@ -203,4 +205,4 @@ for ee in range(100,90,-1):
                 io.imsave(save_result,outputimage)
             
             print('Generated images %04d of %04d' % (idx+1, len(gt_list)))
-    exit(0)
+    # exit(0)
